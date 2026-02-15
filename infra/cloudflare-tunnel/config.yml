@@ -1,0 +1,8 @@
+tunnel: nexahome
+#credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  - hostname: "*.nexahome.win"
+    service: http://traefik:80
+
+  - service: http_status:404

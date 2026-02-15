@@ -1,0 +1,114 @@
+networks:
+  web:
+    external: true
+  internal:
+    external: true
+  edge:
+    external: true
+
+volumes:
+  keycloak_db_data:
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2.5
+    container_name: keycloak
+    restart: unless-stopped
+    command:
+      - start
+    networks:
+      - web
+      - internal
+    volumes:
+      - ./realms:/opt/keycloak/data/import:ro
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USERNAME}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_FEATURES: token-exchange,admin-fine-grained-authz
+      kc.events.enabled: true
+      kc.events.store: jdbc
+      # -----------------------------
+      # External hostname (CRITICAL)
+      # -----------------------------
+      KC_HOSTNAME: auth.nexahome.win
+      KC_HOSTNAME_URL: https://auth.nexahome.win
+      KC_HOSTNAME_PORT: 443
+      KEYCLOAK_FRONTEND_URL: https://auth.nexahome.win
+      # -----------------------------
+      # HTTP listener (internal only)
+      # -----------------------------
+      KC_HTTP_ENABLED: true
+      KC_HTTP_HOST: 0.0.0.0
+      KC_HTTP_PORT: 8080
+      JAVA_OPTS_APPEND: "-Djava.net.preferIPv4Stack=true"
+      KC_HTTP_RELATIVE_PATH: /
+      # -----------------------------
+      # Proxy awareness (CRITICAL)
+      # -----------------------------
+      KC_PROXY: edge
+      KC_PROXY_HEADERS: xforwarded
+      # -----------------------------
+      # Strictness
+      # -----------------------------
+      KC_HOSTNAME_STRICT: true
+      KC_HOSTNAME_STRICT_HTTPS: true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      # Router
+      - "traefik.http.routers.keycloak.rule=Host(`auth.nexahome.win`)"
+      - "traefik.http.routers.keycloak.entrypoints=web"
+      # Service
+      - "traefik.http.services.keycloak.loadbalancer.server.port=8080"
+      # Middlewares
+      - "traefik.http.routers.keycloak.middlewares=app-rateLimit@file,security-headers-keycloak@file,compress-content@file,force-https-proto@file"
+    depends_on:
+      - keycloak-db
+
+  keycloak-db:
+    image: postgres:16
+    container_name: keycloak-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: ${KEYCLOAK_DB_USERNAME}
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+    volumes:
+      - keycloak_db_data:/var/lib/postgresql/data
+    networks:
+      - internal
+
+  keycloak-backup:
+    image: ghcr.io/c-mysec/postgres-backup:latest
+    profiles: ["backup"]
+    depends_on:
+      - keycloak-db
+    environment: &pg_env
+      POSTGRES_HOST: keycloak-db
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: ${KEYCLOAK_DB_USERNAME}
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      PGPASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      OCI_BUCKET: ${OCI_BUCKET:-nexahome-backups}
+      OCI_PREFIX: ${OCI_PREFIX:-keycloak}
+      TZ: America/Sao_Paulo
+    networks:
+      - internal
+      - edge
+    volumes:
+      - ./backup/rclone:/root/.config/rclone:ro
+
+  keycloak-restore:
+    image: ghcr.io/c-mysec/postgres-backup:latest
+    profiles: ["restore"]
+    environment: *pg_env
+    command: ["/backup/restore.sh"]
+    networks:
+      - internal
+      - edge
+    volumes:
+      - ./backup/rclone:/root/.config/rclone:ro

@@ -1,0 +1,16 @@
+networks:
+  edge:
+    external: true
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel run
+    networks:
+      - edge
+    volumes:
+      - ./config.yml:/etc/cloudflared/config.yml:ro
+    environment:
+      - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}

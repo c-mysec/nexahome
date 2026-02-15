@@ -1,0 +1,35 @@
+networks:
+  edge:
+    external: true
+
+  web:
+    external: true
+
+services:
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
+    ports:
+      # Apenas para acesso local/debug (opcional)
+      - "127.0.0.1:443:443"
+    networks:
+      - edge
+      - web
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./dynamic:/etc/traefik/dynamic:ro
+
+    labels:
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      # Dashboard
+      - "traefik.http.routers.traefik.rule=Host(`webdash`)"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.middlewares=local-only@file"
+      - "traefik.http.routers.traefik.tls=true"

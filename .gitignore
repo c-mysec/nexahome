@@ -1,0 +1,17 @@
+**/.local/
+**/.env
+**/.venv/
+/scripts/
+/infra/portrainer/
+templates/
+connectOCI.md
+directory_structure.txt
+directory_structure copy.txt
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.backup
+**/.terraform.lock.hcl
+**/crash.log
+**/*.log
+**/*.tfvars
+**/*.pem

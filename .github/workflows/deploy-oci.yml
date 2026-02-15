@@ -1,0 +1,300 @@
+name: Deploy to OCI A1
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target OCI environment"
+        required: true
+        default: "prod"
+env:
+  CF_TUNNEL_TOKEN: ${{ secrets.CF_TUNNEL_TOKEN }}
+  GLOBAL_POSTGRES_DB: ${{ vars.GLOBAL_POSTGRES_DB}}
+  GLOBAL_POSTGRES_USER: ${{ vars.GLOBAL_POSTGRES_USER}}
+  GLOBAL_POSTGRES_PASSWORD: ${{ secrets.GLOBAL_POSTGRES_PASSWORD}}
+  PGADMIN_DEFAULT_EMAIL: ${{ vars.PGADMIN_DEFAULT_EMAIL}}
+  PGADMIN_DEFAULT_PASSWORD: ${{ secrets.PGADMIN_DEFAULT_PASSWORD}}
+  KEYCLOAK_DB_USERNAME: ${{ vars.KEYCLOAK_DB_USERNAME}}
+  KEYCLOAK_DB_PASSWORD: ${{ secrets.KEYCLOAK_DB_PASSWORD}}
+  KEYCLOAK_ADMIN: ${{ vars.KEYCLOAK_ADMIN}}
+  KEYCLOAK_ADMIN_PASSWORD: ${{ secrets.KEYCLOAK_ADMIN_PASSWORD}}
+  N8N_BASIC_AUTH_USER: ${{ vars.N8N_BASIC_AUTH_USER}}
+  N8N_BASIC_AUTH_PASSWORD: ${{ secrets.N8N_BASIC_AUTH_PASSWORD}}
+  N8N_POSTGRES_DB: ${{ vars.N8N_POSTGRES_DB}}
+  N8N_POSTGRES_USER: ${{ vars.N8N_POSTGRES_USER}}
+  N8N_POSTGRES_PASSWORD: ${{ secrets.N8N_POSTGRES_PASSWORD}}
+
+  # -----------------------------
+  # Terraform input variables
+  # -----------------------------
+  TF_VAR_compartment_ocid: ${{ secrets.OCI_COMPARTMENT_OCID }}
+  TF_VAR_ssh_public_key: ${{ vars.SSH_PUBLIC_KEY }}
+  TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+  # Optional: override default region
+  # (only needed if you want something other than us-ashburn-1)
+  TF_VAR_region: us-ashburn-1
+
+  # -----------------------------
+  # OCI Provider authentication
+  # -----------------------------
+  OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+  OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+  OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+  OCI_REGION: us-ashburn-1
+  TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+  TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
+  TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+
+  # This file is created in a previous step
+  TF_VAR_private_key_path: ${{ github.workspace }}/infra/oci/terraform/oci_api_key.pem
+  OCI_PRIVATE_KEY_PATH: ${{ github.workspace }}/oci_api_key.pem
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Restore OCI private key
+        run: |
+          pwd
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > infra/oci/terraform/oci_api_key.b64
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" | base64 -d > infra/oci/terraform/oci_api_key.pem
+          chmod 600 infra/oci/terraform/oci_api_key.pem
+          ls infra/oci/terraform
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" | base64 -d > oci_api_key.pem
+          chmod 600 oci_api_key.pem
+          ls
+      - name: Configure OCI CLI
+        run: |
+          mkdir -p ~/.oci
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER_OCID }}
+          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_TENANCY_OCID }}
+          region=${{ vars.OCI_REGION }}
+          key_file=${{ github.workspace }}/oci_api_key.pem
+          EOF
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Setup scripts
+        run: |
+          chmod +x ./*.sh
+          ls -l
+
+      - name: Terraform Apply
+        working-directory: infra/oci/terraform
+        run: |
+          pwd
+          ls
+          echo "Using OCI credentials:"
+          echo TF_VAR_user_ocid - $TF_VAR_tenancy_ocid
+          echo TF_VAR_user_ocid - $TF_VAR_user_ocid
+          echo TF_VAR_fingerprint - $TF_VAR_fingerprint
+          echo TF_VAR_private_key_path - $TF_VAR_private_key_path
+          echo TF_VAR_compartment_ocid - $TF_VAR_compartment_ocid
+          echo TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+          echo TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
+          echo TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+          echo N8N_POSTGRES_DB: ${{ vars.N8N_POSTGRES_DB}}
+          echo N8N_POSTGRES_USER: ${{ vars.N8N_POSTGRES_USER}}
+          echo OCI_PRIVATE_KEY_PATH: ${{ github.workspace }}/oci_api_key.pem
+
+          terraform init
+          echo "After Terraform init..."
+
+          ls -l
+          ls -l ${{ github.workspace }}
+          echo "Terraform tfplan"
+          terraform plan -out=tfplan
+          echo "Terraform show"
+          terraform show -json tfplan | jq '.variables'
+
+          echo "Planning Terraform deployment..."
+          terraform apply -auto-approve
+
+      - name: Get VM public IP
+        id: ip
+        working-directory: infra/oci/terraform
+        run: |
+          echo "ip=$(terraform output -raw public_ip)" >> $GITHUB_OUTPUT
+
+      - name: Verify SSH keys and installed key
+        working-directory: infra/oci/terraform
+        env:
+          OCI_SSH_PRIVATE_KEY_B64: ${{ secrets.OCI_SSH_PRIVATE_KEY }}    # base64(priv)
+          SSH_PUBLIC_KEY: ${{ vars.SSH_PUBLIC_KEY }}                 # raw pubkey: "ssh-ed25519 AAAA..."
+        run: |
+          set -euo pipefail
+
+          # write private key (for fingerprint derivation only)
+          mkdir -p ~/.ssh
+          echo "$OCI_SSH_PRIVATE_KEY_B64" | base64 -d > ~/.ssh/id_nexahome
+          chmod 600 ~/.ssh/id_nexahome
+          printf '%s\n' "Host *" "  IdentityFile ~/.ssh/id_nexahome" "  User opc" "  StrictHostKeyChecking no" > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          ls -l ~/.ssh
+
+          # derive public from private, write both public keys to temp files
+          ssh-keygen -y -f ~/.ssh/id_nexahome > /tmp/derived.pub
+          printf '%s\n' "$SSH_PUBLIC_KEY" > /tmp/declared.pub
+
+          # print fingerprints (safe)
+          echo "Derived private-key fingerprint:"
+          ssh-keygen -lf /tmp/derived.pub
+          echo "Declared public-key fingerprint:"
+          ssh-keygen -lf /tmp/declared.pub
+
+          # compare public keys
+          if cmp -s /tmp/derived.pub /tmp/declared.pub; then
+            echo "Private key and declared public key MATCH"
+          else
+            echo "Private key and declared public key DO NOT MATCH"
+            echo "Check your GitHub secrets: ensure OCI_SSH_PRIVATE_KEY is the base64-encoded private key and SSH_PUBLIC_KEY is the public key text."
+            exit 2
+          fi
+
+          # show what key Terraform stored in the instance metadata (from state)
+          echo "SSH key stored in Terraform state for the instance (truncated):"
+          terraform show -json | jq -r '
+            .. | objects | select(.type? == "oci_core_instance") |
+            .values.metadata.ssh_authorized_keys // empty' | sed -n '1p'
+
+      - name: Wait for SSH
+        run: |
+          for i in {1..30}; do
+            if nc -z ${{ steps.ip.outputs.ip }} 22; then
+              echo "SSH is up"
+              exit 0
+            fi
+            echo "Waiting for SSH..."
+            sleep 10
+          done
+          echo "SSH did not become available"
+          exit 1
+
+      - name: Wait for git on remote
+        run: |
+          for i in {1..30}; do
+            if ssh -o BatchMode=yes -o StrictHostKeyChecking=no opc@${{ steps.ip.outputs.ip }} 'command -v git >/dev/null 2>&1'; then
+              echo "git is available on remote"
+              exit 0
+            fi
+            echo "Waiting for git on remote..."
+            sleep 10
+          done
+          echo "git did not become available"
+          exit 1
+      - name: Wait for docker on remote
+        run: |
+          for i in {1..30}; do
+            if ssh -o BatchMode=yes -o StrictHostKeyChecking=no opc@${{ steps.ip.outputs.ip }} 'command -v docker >/dev/null 2>&1 && sudo systemctl is-active --quiet docker'; then
+              echo "docker is available on remote"
+              exit 0
+            fi
+            echo "Waiting for docker on remote..."
+            sleep 10
+          done
+          echo "docker did not become available"
+          exit 1
+      - name: Sync repository on OCI
+        run: |
+          ssh -o StrictHostKeyChecking=no opc@${{ steps.ip.outputs.ip }} <<'EOF'
+            set -e
+            sudo mkdir -p /opt
+            sudo chown opc:opc /opt
+            cd /opt
+            if [ ! -d nexahome ]; then
+              git clone https://github.com/c-mysec/nexahome.git
+            fi
+            cd nexahome
+            git pull
+            sudo chmod +x ./infra/oci/scripts/*.sh
+            ls -l ./infra/oci/scripts/
+            sudo ./infra/oci/scripts/create-networks.sh
+            sudo ./infra/oci/scripts/deploy-traefik.sh
+          EOF
+
+      - name: Deploy cloudflared
+        run: |
+          ssh -o StrictHostKeyChecking=no opc@${{ steps.ip.outputs.ip }} <<EOF
+            set -e
+            cd /opt/nexahome/infra/cloudflare-tunnel
+
+            cat > .env <<'EOT'
+              CF_TUNNEL_TOKEN=${{ secrets.CF_TUNNEL_TOKEN }}
+          EOT
+
+            chmod 600 .env
+            docker compose pull
+            docker compose up -d
+          EOF
+
+      - name: RClone backup scripts to OCI and set env vars
+        run: |
+          ssh -o StrictHostKeyChecking=no opc@${{ steps.ip.outputs.ip }} <<EOF
+            set -e
+            mkdir -p /opt/nexahome/platform/postgres/backup/rclone
+            cd /opt/nexahome/platform/postgres/backup/rclone
+            cat > rclone.conf <<'EOT'
+              [oci]
+              type = s3
+              provider = Other
+              access_key_id = ${{ secrets.OCI_ACCESS_KEY_ID }}
+              secret_access_key = ${{ secrets.OCI_SECRET_ACCESS_KEY }}
+              endpoint = ${{ vars.OCI_NEXAHOME_BUCKET_NAMESPACE }}.compat.objectstorage.${{ vars.OCI_REGION }}.oraclecloud.com
+              region = ${{ vars.OCI_REGION }}
+              env_auth = false
+              acl = private
+              force_path_style = true
+              bucket_ocid = ${{ secrets.OCI_NEXAHOME_BUCKET_OCID }}
+          EOT
+            mkdir -p /opt/nexahome/platform/keycloak/backup/rclone
+            cp rclone.conf /opt/nexahome/platform/keycloak/backup/rclone/rclone.conf
+            mkdir -p /opt/nexahome/platform/n8n/backup/rclone
+            cp rclone.conf /opt/nexahome/platform/n8n/backup/rclone/rclone.conf
+          EOF
+      - name: Deploy platform
+        run: |
+          ssh -o StrictHostKeyChecking=no opc@${{ steps.ip.outputs.ip }} <<EOF
+            set -e
+            cd /opt/nexahome/platform
+
+            cat > postgres/.env <<'EOT'
+              POSTGRES_DB=${{ vars.GLOBAL_POSTGRES_DB }}
+              POSTGRES_USER=${{ vars.GLOBAL_POSTGRES_USER }}
+              POSTGRES_PASSWORD=${{ secrets.GLOBAL_POSTGRES_PASSWORD }}
+              PGADMIN_DEFAULT_EMAIL=${{ vars.PGADMIN_DEFAULT_EMAIL }}
+              PGADMIN_DEFAULT_PASSWORD=${{ secrets.PGADMIN_DEFAULT_PASSWORD }}
+              OCI_BUCKET=nexahome-backups
+              OCI_PREFIX=postgres
+          EOT
+            cat > keycloak/.env <<'EOT'
+              KEYCLOAK_DB_USERNAME=${{ vars.KEYCLOAK_DB_USERNAME }}
+              KEYCLOAK_DB_PASSWORD=${{ secrets.KEYCLOAK_DB_PASSWORD }}
+              KEYCLOAK_ADMIN=${{ vars.KEYCLOAK_ADMIN }}
+              KEYCLOAK_ADMIN_PASSWORD=${{ secrets.KEYCLOAK_ADMIN_PASSWORD }}
+              OCI_BUCKET=nexahome-backups
+              OCI_PREFIX=keycloak
+          EOT
+            cat > n8n/.env <<'EOT'
+              N8N_BASIC_AUTH_USER=${{ vars.N8N_BASIC_AUTH_USER }}
+              N8N_BASIC_AUTH_PASSWORD=${{ secrets.N8N_BASIC_AUTH_PASSWORD }}
+              POSTGRES_DB=${{ vars.N8N_POSTGRES_DB }}
+              POSTGRES_USER=${{ vars.N8N_POSTGRES_USER }}
+              POSTGRES_PASSWORD=${{ secrets.N8N_POSTGRES_PASSWORD }}
+              OCI_BUCKET=nexahome-backups
+              OCI_PREFIX=n8n
+          EOT
+
+            chmod 600 postgres/.env keycloak/.env n8n/.env
+
+            cd postgres && docker compose up -d
+            cd ../keycloak && docker compose up -d
+            cd ../n8n && docker compose up -d
+          EOF

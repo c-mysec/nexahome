@@ -1,0 +1,114 @@
+networks:
+  internal:
+    external: true
+  web:
+    external: true
+  edge:
+    external: true
+
+volumes:
+  postgresql_data:
+  pgadmin_data:
+    # Manage the Data with docker volume commands 
+    # docker volume inspect postgresql_data
+    # docker compose stop db
+    # cd /var/lib/docker/volumes/yourproject_postgresql_data/
+    # tar -czvf postgresql_data.tar.gz _data
+    # on the new host
+    # cd /var/lib/docker/volumes/yourproject_postgresql_data/
+    # tar -xzvf /path/to/postgresql_data.tar.gz
+    #
+    # or use pg_dump
+
+services:
+  redis:
+    image: redis:alpine
+    container_name: redis
+    restart: always
+    networks:
+      - internal
+
+  postgresql:
+    image: postgres:latest
+    container_name: postgresql
+    restart: unless-stopped
+
+    networks:
+      - internal
+
+    volumes:
+      - postgresql_data:/var/lib/postgresql
+      # - postgresql_data:/var/lib/postgresql/data
+      # - ./init:/docker-entrypoint-initdb.d
+
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-db}
+      - POSTGRES_USER=${POSTGRES_USER:-username}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-senha}
+      - TZ=America/Sao_Paulo
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-username}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-backup:
+    image: ghcr.io/c-mysec/postgres-backup:latest
+    profiles: ["backup"]
+    depends_on:
+      - postgresql
+    environment: &pg_env
+      POSTGRES_HOST: postgresql
+      POSTGRES_DB: ${POSTGRES_DB:-db}
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-senha}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-senha}
+      OCI_BUCKET: ${OCI_BUCKET:-nexahome-backups}
+      OCI_PREFIX: ${OCI_PREFIX:-postgres}
+      TZ: America/Sao_Paulo
+    networks:
+      - internal
+      - edge
+    volumes:
+      - ./backup/rclone:/root/.config/rclone:ro
+
+  postgres-restore:
+    image: ghcr.io/c-mysec/postgres-backup:latest
+    profiles: ["restore"]
+    environment: *pg_env
+    command: ["/backup/restore.sh"]
+    networks:
+      - internal
+      - edge
+    volumes:
+      - ./backup/rclone:/root/.config/rclone:ro
+
+  pgadmin:
+    container_name: pgadmin
+    image: dpage/pgadmin4
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-name@gmail.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-senha}
+    # port mapping deixa acessível fora do host
+    #ports:
+    #  - "5050:80"
+    depends_on:
+      - postgresql
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - internal
+      - web
+    labels:
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      # LAN-only editor
+      - "traefik.http.routers.pgadmin.rule=Host(`pgadmin`)"
+      - "traefik.http.routers.pgadmin.entrypoints=websecure"
+      - "traefik.http.routers.pgadmin.service=pgadmin"
+      - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
+      - "traefik.http.routers.pgadmin.middlewares=local-only@file"
+      - "traefik.http.routers.pgadmin.tls=true"
+

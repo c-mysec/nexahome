@@ -1,0 +1,30 @@
+networks:
+  web:
+    external: true
+  internal:
+    external: true
+
+services:
+  apifin:
+    image: ghcr.io/nexahome/apifin:latest
+    container_name: apifin
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - web
+      - internal
+    depends_on:
+      - postgres
+      - redis
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=web"
+      # Router
+      - "traefik.http.routers.apifin.rule=Host(`api.nexahome.win`)"
+      - "traefik.http.routers.apifin.entrypoints=web"
+      # Service
+      - "traefik.http.services.apifin.loadbalancer.server.port=3001"
+      # Middlewares padrão
+      - "traefik.http.routers.apifin.middlewares=redirect-to-https@file,security-headers@file,compress-content@file,app-rateLimit@file"
+

@@ -1,0 +1,56 @@
+http:
+  middlewares:
+    local-only:
+      ipAllowList:
+        sourceRange:
+          - "127.0.0.1/32"
+          - "192.168.15.0/24"
+          - "172.18.0.0/24"
+          - "172.19.0.0/24"
+          - "172.20.0.0/16"
+          - "172.21.0.0/24"
+          - "172.22.0.0/16"
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+    auth:
+      basicAuth:
+        users:
+          - "admin:$apr1$bIHjXAQQ$OZyRI/g36M3SE8lIRr.1H/"
+    force-https-proto:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Proto: https
+          X-Forwarded-Port: "443"
+    security-headers:
+      headers:
+        frameDeny: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: "strict-origin-when-cross-origin"
+        stsSeconds: 63072000
+        stsIncludeSubdomains: true
+        stsPreload: true
+    security-headers-keycloak:
+      headers:
+        frameDeny: false 
+        customFrameOptionsValue: "SAMEORIGIN"
+        contentSecurityPolicy: "frame-ancestors 'self' https://auth.nexahome.win;"
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: "strict-origin-when-cross-origin"
+        stsSeconds: 63072000
+        stsIncludeSubdomains: true
+        stsPreload: true
+    compress-content:
+      compress:
+        minResponseBodyBytes: 1024
+        encodings:
+          - br
+          - gzip
+          - zstd
+    app-rateLimit:
+      rateLimit:
+        average: 100
+        burst: 50

@@ -1,0 +1,21 @@
+networks:
+  edge:
+    name: edge
+    driver: bridge
+
+  web:
+    name: web
+    driver: bridge
+
+  internal:
+    name: internal
+    driver: bridge
+    internal: true
+services:
+  bootstrap:
+    image: alpine
+    command: ["sh", "-c", "echo networks ready"]
+    networks:
+      - edge
+      - web
+      - internal
